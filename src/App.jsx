@@ -1,16 +1,32 @@
 import { useState, useEffect, useRef } from "react";
 import { Chart, registerables } from "chart.js";
+import { createClient } from "@supabase/supabase-js";
 Chart.register(...registerables);
 
 const POLYGON_KEY = import.meta.env.VITE_POLYGON_KEY;
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_KEY
+);
 
-const HOLDINGS = [
+const DEFAULT_HOLDINGS = [
   { t: "NVDA", n: "Nvidia", sh: 42, p: 875.32, c: 0, col: "#5dcaa5", bg: "rgba(29,158,117,0.15)" },
   { t: "AAPL", n: "Apple", sh: 115, p: 189.4, c: 0, col: "#7f77dd", bg: "rgba(127,119,221,0.15)" },
   { t: "MSFT", n: "Microsoft", sh: 58, p: 412.87, c: 0, col: "#378add", bg: "rgba(55,138,221,0.15)" },
   { t: "AMZN", n: "Amazon", sh: 22, p: 185.7, c: 0, col: "#d85a30", bg: "rgba(216,90,48,0.15)" },
   { t: "SPY", n: "S&P 500 ETF", sh: 88, p: 521.14, c: 0, col: "#888780", bg: "rgba(136,135,128,0.15)" },
 ];
+
+const TICKER_META = {
+  NVDA: { n: "Nvidia", col: "#5dcaa5", bg: "rgba(29,158,117,0.15)" },
+  AAPL: { n: "Apple", col: "#7f77dd", bg: "rgba(127,119,221,0.15)" },
+  MSFT: { n: "Microsoft", col: "#378add", bg: "rgba(55,138,221,0.15)" },
+  AMZN: { n: "Amazon", col: "#d85a30", bg: "rgba(216,90,48,0.15)" },
+  SPY: { n: "S&P 500 ETF", col: "#888780", bg: "rgba(136,135,128,0.15)" },
+  TSLA: { n: "Tesla", col: "#ef9f27", bg: "rgba(239,159,39,0.15)" },
+  GOOG: { n: "Alphabet", col: "#5dcaa5", bg: "rgba(29,158,117,0.15)" },
+  META: { n: "Meta", col: "#378add", bg: "rgba(55,138,221,0.15)" },
+};
 
 const ALLOCS = [
   { nm: "Technology", pc: 51, col: "#7f77dd" },
@@ -29,9 +45,9 @@ const NEWS = [
 
 const INSIGHTS = [
   "Your portfolio outperformed the S&P 500 by 2.3% this week. NVDA is your star — consider trimming 10% to lock in gains.",
-  "Concentration alert: 51% in tech. If rates rise, you could see amplified downside. Consider adding defensive positions.",
-  "BTC is approaching key resistance at $68,500. Your position could see a 12% move in either direction this week.",
-  "Tax-loss opportunity: MSFT is down today. A small trim could offset gains and reduce your cap gains exposure.",
+  "Concentration alert: 51% in tech. If rates rise, you could see amplified downside.",
+  "BTC is approaching key resistance at $68,500. Watch for a breakout or rejection this week.",
+  "Tax-loss opportunity: consider harvesting losses to offset gains before year end.",
 ];
 
 const s = {
@@ -42,7 +58,6 @@ const s = {
   navTabsWrap: { display: "flex", gap: 2, background: "#111118", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: 3 },
   navTab: { fontSize: 11, padding: "5px 12px", borderRadius: 5, border: "none", background: "transparent", color: "#6b6a80", cursor: "pointer" },
   navTabOn: { fontSize: 11, padding: "5px 12px", borderRadius: 5, border: "0.5px solid rgba(255,255,255,0.11)", background: "#1c1c28", color: "#edeaf8", cursor: "pointer" },
-  livePill: { fontSize: 10, color: "#5dcaa5", background: "rgba(93,202,165,0.07)", border: "0.5px solid rgba(93,202,165,0.25)", padding: "3px 8px", borderRadius: 4, display: "flex", alignItems: "center", gap: 5 },
   body: { display: "grid", gridTemplateColumns: "200px 1fr 210px", flex: 1, minHeight: 0 },
   sidebar: { borderRight: "0.5px solid rgba(255,255,255,0.06)", padding: "16px 0", display: "flex", flexDirection: "column", overflowY: "auto" },
   navGroup: { padding: "0 12px", marginBottom: 24 },
@@ -56,16 +71,82 @@ const s = {
   statRow: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 },
   stat: { background: "#111118", border: "0.5px solid rgba(255,255,255,0.06)", borderRadius: 8, padding: "12px 14px" },
   hRow: { display: "grid", gridTemplateColumns: "32px 1fr 70px 80px 60px", alignItems: "center", gap: 8, padding: "9px 4px", borderBottom: "0.5px solid rgba(255,255,255,0.06)", cursor: "pointer" },
-  secHdr: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
-  aiPanel: { background: "rgba(127,119,221,0.07)", border: "0.5px solid rgba(127,119,221,0.2)", borderRadius: 10, padding: 16, marginBottom: 16 },
+  input: { width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "10px 12px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box", marginBottom: 10 },
+  btn: (col) => ({ width: "100%", padding: 11, borderRadius: 7, border: "none", background: col || "#7f77dd", color: "#fff", fontFamily: "'DM Mono',monospace", fontSize: 12, cursor: "pointer", marginTop: 4 }),
   bottomBar: { borderTop: "0.5px solid rgba(255,255,255,0.06)", padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#09090f" },
 };
 
 function fmt(n) { return "$" + Math.round(n).toLocaleString(); }
 
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function handle() {
+    setLoading(true);
+    setError("");
+    setMsg("");
+    try {
+      if (mode === "login") {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        onAuth(data.user);
+      } else {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setMsg("Account created! Check your email to confirm, then log in.");
+        setMode("login");
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#09090f", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+      <div style={{ width: 360, background: "#111118", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 14, padding: 28 }}>
+        <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 22, fontWeight: 800, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={s.logoMark}><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 10 L6 2 L10 10" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><path d="M3.5 7.5h5" stroke="white" strokeWidth="1.4" strokeLinecap="round" /></svg></div>
+          VAULT
+        </div>
+        <div style={{ fontSize: 11, color: "#6b6a80", marginBottom: 24 }}>Your personal finance OS</div>
+
+        <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "#0d0d14", padding: 3, borderRadius: 7 }}>
+          {["login", "signup"].map(m => (
+            <button key={m} onClick={() => setMode(m)} style={{ flex: 1, padding: "7px", borderRadius: 5, border: "none", background: mode === m ? "#1c1c28" : "transparent", color: mode === m ? "#edeaf8" : "#6b6a80", fontFamily: "'DM Mono',monospace", fontSize: 11, cursor: "pointer" }}>
+              {m === "login" ? "Log in" : "Sign up"}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Email</div>
+        <input value={email} onChange={e => setEmail(e.target.value)} placeholder="you@email.com" style={s.input} />
+        <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Password</div>
+        <input value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" type="password" style={s.input} onKeyDown={e => e.key === "Enter" && handle()} />
+
+        {error && <div style={{ fontSize: 11, color: "#e24b4a", marginBottom: 8 }}>{error}</div>}
+        {msg && <div style={{ fontSize: 11, color: "#5dcaa5", marginBottom: 8 }}>{msg}</div>}
+
+        <button onClick={handle} style={s.btn()} disabled={loading}>
+          {loading ? "Loading..." : mode === "login" ? "Log in" : "Create account"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [page, setPage] = useState("dashboard");
-  const [holdings, setHoldings] = useState(HOLDINGS);
+  const [holdings, setHoldings] = useState(DEFAULT_HOLDINGS);
   const [loading, setLoading] = useState(true);
   const [dataSource, setDataSource] = useState("simulated");
   const [portVal, setPortVal] = useState(0);
@@ -78,32 +159,40 @@ export default function App() {
   const [tradeSym, setTradeSym] = useState("NVDA");
   const [tradeQty, setTradeQty] = useState(10);
   const [aiInput, setAiInput] = useState("");
-  const [aiMessages, setAiMessages] = useState([{ from: "vault", text: "Good morning. Loading your real portfolio data now..." }]);
+  const [aiMessages, setAiMessages] = useState([{ from: "vault", text: "Loading your portfolio..." }]);
+  const [newTicker, setNewTicker] = useState("");
+  const [newShares, setNewShares] = useState("");
 
-  async function fetchRealPrices() {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthChecked(true);
+    });
+    supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+  }, []);
+
+  async function fetchRealPrices(holdingsToUse) {
+    const src = holdingsToUse || holdings;
     try {
-      const updated = [...HOLDINGS];
+      const updated = [...src];
       for (let i = 0; i < updated.length; i++) {
         const h = updated[i];
-        const res = await fetch(
-          `https://api.polygon.io/v2/aggs/ticker/${h.t}/prev?adjusted=true&apiKey=${POLYGON_KEY}`
-        );
+        const res = await fetch(`https://api.polygon.io/v2/aggs/ticker/${h.t}/prev?adjusted=true&apiKey=${POLYGON_KEY}`);
         const data = await res.json();
         if (data.results && data.results[0]) {
-          const result = data.results[0];
-          const price = result.c;
-          const open = result.o;
-          const change = ((price - open) / open) * 100;
-          updated[i] = { ...h, p: price, c: parseFloat(change.toFixed(2)) };
+          const r = data.results[0];
+          updated[i] = { ...h, p: r.c, c: parseFloat(((r.c - r.o) / r.o * 100).toFixed(2)) };
         }
       }
       setHoldings(updated);
       const total = updated.reduce((sum, h) => sum + h.p * h.sh, 0);
       setPortVal(Math.round(total));
       setDataSource("live");
-      setAiMessages([{ from: "vault", text: `Live data loaded. Your portfolio is worth ${fmt(total)} based on yesterday's closing prices. NVDA is ${updated[0].c >= 0 ? "up" : "down"} ${Math.abs(updated[0].c).toFixed(2)}% — your biggest position.` }]);
-    } catch (err) {
-      const total = HOLDINGS.reduce((sum, h) => sum + h.p * h.sh, 0);
+      setAiMessages([{ from: "vault", text: `Live data loaded. Portfolio value: ${fmt(total)}. ${updated[0].t} is ${updated[0].c >= 0 ? "up" : "down"} ${Math.abs(updated[0].c).toFixed(2)}% today.` }]);
+    } catch {
+      const total = src.reduce((sum, h) => sum + h.p * h.sh, 0);
       setPortVal(Math.round(total));
       setDataSource("simulated");
     } finally {
@@ -111,16 +200,48 @@ export default function App() {
     }
   }
 
+  async function loadUserPortfolio() {
+    if (!user) { fetchRealPrices(DEFAULT_HOLDINGS); return; }
+    const { data } = await supabase.from("portfolios").select("*").eq("user_id", user.id);
+    if (data && data.length > 0) {
+      const loaded = data.map(row => ({
+        t: row.ticker,
+        n: TICKER_META[row.ticker]?.n || row.ticker,
+        sh: row.shares,
+        p: 100, c: 0,
+        col: TICKER_META[row.ticker]?.col || "#7f77dd",
+        bg: TICKER_META[row.ticker]?.bg || "rgba(127,119,221,0.15)",
+      }));
+      fetchRealPrices(loaded);
+    } else {
+      fetchRealPrices(DEFAULT_HOLDINGS);
+    }
+  }
+
+  async function addPosition() {
+    if (!newTicker || !newShares) return;
+    const ticker = newTicker.toUpperCase();
+    const shares = parseFloat(newShares);
+    if (!user) return;
+    await supabase.from("portfolios").upsert({ user_id: user.id, ticker, shares }, { onConflict: "user_id,ticker" });
+    const meta = TICKER_META[ticker] || { n: ticker, col: "#7f77dd", bg: "rgba(127,119,221,0.15)" };
+    const newH = [...holdings, { t: ticker, n: meta.n, sh: shares, p: 100, c: 0, col: meta.col, bg: meta.bg }];
+    setNewTicker("");
+    setNewShares("");
+    fetchRealPrices(newH);
+  }
+
   useEffect(() => {
-    fetchRealPrices();
+    if (authChecked) loadUserPortfolio();
+  }, [authChecked, user]);
+
+  useEffect(() => {
     const clkInt = setInterval(() => {
       const n = new Date();
       setClock([n.getHours(), n.getMinutes(), n.getSeconds()].map(x => String(x).padStart(2, "0")).join(":"));
     }, 1000);
     const insightInt = setInterval(() => setInsightIdx(i => (i + 1) % INSIGHTS.length), 6000);
-    const tickInt = setInterval(() => {
-      setPortVal(v => Math.round(v + (Math.random() - 0.48) * 220));
-    }, 2600);
+    const tickInt = setInterval(() => setPortVal(v => Math.round(v + (Math.random() - 0.48) * 180)), 2600);
     return () => { clearInterval(clkInt); clearInterval(insightInt); clearInterval(tickInt); };
   }, []);
 
@@ -136,7 +257,7 @@ export default function App() {
     chartInstance.current = new Chart(chartRef.current, {
       type: "line",
       data: { labels: data.map((_, i) => i), datasets: [{ data, borderColor: "#5dcaa5", borderWidth: 1.5, fill: false, tension: 0.35, pointRadius: 0 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: "#1c1c28", bodyColor: "#edeaf8", bodyFont: { size: 12 }, callbacks: { title: () => "", label: c => "$" + c.parsed.y.toLocaleString() } } }, scales: { x: { display: false }, y: { display: true, position: "right", grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#4a4960", callback: v => "$" + Math.round(v / 1000) + "k", maxTicksLimit: 4 }, border: { display: false } } } },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: "#1c1c28", bodyColor: "#edeaf8", callbacks: { title: () => "", label: c => "$" + c.parsed.y.toLocaleString() } } }, scales: { x: { display: false }, y: { display: true, position: "right", grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#4a4960", callback: v => "$" + Math.round(v / 1000) + "k", maxTicksLimit: 4 }, border: { display: false } } } },
     });
   }, [tf, page, portVal]);
 
@@ -147,9 +268,12 @@ export default function App() {
   function sendAI() {
     if (!aiInput.trim()) return;
     const q = aiInput;
-    setAiMessages(m => [...m, { from: "user", text: q }, { from: "vault", text: `Analyzing "${q}" in context of your ${dataSource === "live" ? "live" : "simulated"} portfolio worth ${fmt(portVal)}. Your largest position is NVDA at ${Math.round(holdings[0].p * holdings[0].sh / portVal * 100)}% of total value. Consider your risk tolerance before making changes.` }]);
+    setAiMessages(m => [...m, { from: "user", text: q }, { from: "vault", text: `Analyzing your portfolio (${fmt(portVal)}) in context of: "${q}". Your top position is ${holdings[0]?.t} at ${Math.round(holdings[0]?.p * holdings[0]?.sh / portVal * 100)}% of total value. Consider your risk tolerance before making changes.` }]);
     setAiInput("");
   }
+
+  if (!authChecked) return <div style={{ background: "#09090f", minHeight: "100vh" }} />;
+  if (!user) return <AuthScreen onAuth={setUser} />;
 
   return (
     <div style={s.app}>
@@ -167,11 +291,13 @@ export default function App() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ ...s.livePill, color: dataSource === "live" ? "#5dcaa5" : "#ef9f27", borderColor: dataSource === "live" ? "rgba(93,202,165,0.25)" : "rgba(239,159,39,0.25)" }}>
+          <div style={{ fontSize: 10, color: "#6b6a80" }}>{user.email}</div>
+          <div style={{ fontSize: 10, color: dataSource === "live" ? "#5dcaa5" : "#ef9f27", background: dataSource === "live" ? "rgba(93,202,165,0.07)" : "rgba(239,159,39,0.07)", border: `0.5px solid ${dataSource === "live" ? "rgba(93,202,165,0.25)" : "rgba(239,159,39,0.25)"}`, padding: "3px 8px", borderRadius: 4, display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ width: 5, height: 5, borderRadius: "50%", background: dataSource === "live" ? "#5dcaa5" : "#ef9f27", animation: "blink 1.3s infinite" }} />
-            {dataSource === "live" ? "Live data" : "Simulated"}
+            {dataSource === "live" ? "Live" : "Sim"}
           </div>
           <span style={{ fontSize: 11, color: "#6b6a80" }}>{clock}</span>
+          <button onClick={() => supabase.auth.signOut()} style={{ fontSize: 10, color: "#6b6a80", background: "none", border: "0.5px solid rgba(255,255,255,0.08)", borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}>Sign out</button>
         </div>
       </div>
 
@@ -185,7 +311,7 @@ export default function App() {
           </div>
           <div style={s.navGroup}>
             <div style={s.navLabel}>Watchlist</div>
-            {holdings.slice(0, 4).map(h => (
+            {holdings.slice(0, 5).map(h => (
               <div key={h.t} style={{ display: "flex", justifyContent: "space-between", padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>
                 <span>{h.t}</span>
                 <span style={{ color: h.c >= 0 ? "#5dcaa5" : "#e24b4a" }}>{h.c >= 0 ? "+" : ""}{h.c.toFixed(2)}%</span>
@@ -211,7 +337,7 @@ export default function App() {
 
           {!loading && page === "dashboard" && (
             <>
-              <div style={s.aiPanel}>
+              <div style={{ background: "rgba(127,119,221,0.07)", border: "0.5px solid rgba(127,119,221,0.2)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                   <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#7f77dd", animation: "blink 2s infinite" }} />
                   <span style={{ fontSize: 10, color: "#7f77dd", textTransform: "uppercase", letterSpacing: "0.1em" }}>Vault AI · Market Pulse</span>
@@ -244,10 +370,8 @@ export default function App() {
                   <div key={l} style={s.stat}><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b6a80", marginBottom: 5 }}>{l}</div><div style={{ fontSize: 19, fontFamily: "'DM Mono',monospace", fontWeight: 700, color: col }}>{v}</div><div style={{ fontSize: 10, color: "#6b6a80", marginTop: 2 }}>{sub}</div></div>
                 ))}
               </div>
-              <div style={s.secHdr}>
-                <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 600 }}>
-                  Holdings {dataSource === "live" && <span style={{ fontSize: 10, color: "#5dcaa5", marginLeft: 6 }}>● live</span>}
-                </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 600 }}>Holdings {dataSource === "live" && <span style={{ fontSize: 10, color: "#5dcaa5", marginLeft: 6 }}>● live</span>}</div>
               </div>
               {holdings.map(h => (
                 <div key={h.t} style={s.hRow}>
@@ -258,6 +382,15 @@ export default function App() {
                   <div style={{ fontSize: 11, textAlign: "right", color: h.c >= 0 ? "#5dcaa5" : "#e24b4a" }}>{h.c >= 0 ? "+" : ""}{h.c.toFixed(2)}%</div>
                 </div>
               ))}
+
+              <div style={{ marginTop: 20 }}>
+                <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Add position</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8 }}>
+                  <input value={newTicker} onChange={e => setNewTicker(e.target.value.toUpperCase())} placeholder="Ticker (AAPL)" style={{ ...s.input, marginBottom: 0 }} />
+                  <input value={newShares} onChange={e => setNewShares(e.target.value)} placeholder="Shares" type="number" style={{ ...s.input, marginBottom: 0 }} />
+                  <button onClick={addPosition} style={{ padding: "10px 16px", background: "#7f77dd", color: "#fff", border: "none", borderRadius: 6, fontFamily: "'DM Mono',monospace", fontSize: 12, cursor: "pointer" }}>Add</button>
+                </div>
+              </div>
             </>
           )}
 
@@ -270,17 +403,13 @@ export default function App() {
                     <button key={t} onClick={() => setTradeType(t)} style={{ flex: 1, padding: 8, borderRadius: 6, fontSize: 12, border: "0.5px solid rgba(255,255,255,0.1)", background: tradeType === t ? (t === "buy" ? "rgba(93,202,165,0.14)" : "rgba(226,75,74,0.13)") : "transparent", color: tradeType === t ? (t === "buy" ? "#5dcaa5" : "#e24b4a") : "#6b6a80", cursor: "pointer" }}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>
                   ))}
                 </div>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Symbol</div>
-                  <input value={tradeSym} onChange={e => setTradeSym(e.target.value)} style={{ width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Shares</div>
-                  <input type="number" value={tradeQty} onChange={e => setTradeQty(Number(e.target.value))} style={{ width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6b6a80", marginBottom: 5 }}><span>Price {dataSource === "live" ? "(live)" : "(est.)"}</span><span>${tradePrice.toFixed(2)}</span></div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 5 }}><span style={{ color: "#6b6a80" }}>Total cost</span><span>{tradeTotal}</span></div>
-                <button style={{ width: "100%", padding: 10, borderRadius: 7, border: "none", background: tradeType === "buy" ? "#5dcaa5" : "#e24b4a", color: tradeType === "buy" ? "#04342c" : "#fff", fontFamily: "'DM Mono',monospace", fontSize: 12, cursor: "pointer", marginTop: 10 }}>Preview {tradeType} order</button>
+                <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Symbol</div>
+                <input value={tradeSym} onChange={e => setTradeSym(e.target.value)} style={s.input} />
+                <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Shares</div>
+                <input type="number" value={tradeQty} onChange={e => setTradeQty(Number(e.target.value))} style={s.input} />
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6b6a80", marginBottom: 5 }}><span>Price</span><span>${tradePrice.toFixed(2)}</span></div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 5 }}><span style={{ color: "#6b6a80" }}>Total</span><span>{tradeTotal}</span></div>
+                <button style={s.btn(tradeType === "buy" ? "#5dcaa5" : "#e24b4a")}>Preview {tradeType} order</button>
               </div>
             </>
           )}
@@ -297,7 +426,7 @@ export default function App() {
                 ))}
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <input value={aiInput} onChange={e => setAiInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendAI()} placeholder="Ask anything about your portfolio..." style={{ flex: 1, background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 11, outline: "none" }} />
+                <input value={aiInput} onChange={e => setAiInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendAI()} placeholder="Ask anything about your portfolio..." style={{ ...s.input, marginBottom: 0, flex: 1 }} />
                 <button onClick={sendAI} style={{ padding: "8px 14px", background: "#7f77dd", color: "#fff", border: "none", borderRadius: 6, fontFamily: "'DM Mono',monospace", fontSize: 11, cursor: "pointer" }}>Send</button>
               </div>
             </>
@@ -357,7 +486,7 @@ export default function App() {
           ))}
         </div>
         <div style={{ fontSize: 10, color: "#4a4960" }}>
-          {dataSource === "live" ? "Powered by Polygon.io" : "Simulated data"} · Not financial advice
+          {dataSource === "live" ? "Powered by Polygon.io" : "Simulated"} · Not financial advice
         </div>
       </div>
     </div>
