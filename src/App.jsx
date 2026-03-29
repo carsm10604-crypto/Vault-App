@@ -2,13 +2,14 @@ import { useState, useEffect, useRef } from "react";
 import { Chart, registerables } from "chart.js";
 Chart.register(...registerables);
 
+const POLYGON_KEY = import.meta.env.VITE_POLYGON_KEY;
+
 const HOLDINGS = [
-  { t: "NVDA", n: "Nvidia", sh: 42, p: 875.32, c: 3.14, col: "#5dcaa5", bg: "rgba(29,158,117,0.15)" },
-  { t: "AAPL", n: "Apple", sh: 115, p: 189.4, c: 0.61, col: "#7f77dd", bg: "rgba(127,119,221,0.15)" },
-  { t: "MSFT", n: "Microsoft", sh: 58, p: 412.87, c: -0.88, col: "#378add", bg: "rgba(55,138,221,0.15)" },
-  { t: "BTC", n: "Bitcoin", sh: 0.72, p: 67240, c: 2.31, col: "#ef9f27", bg: "rgba(239,159,39,0.15)" },
-  { t: "SPY", n: "S&P 500 ETF", sh: 88, p: 521.14, c: 0.44, col: "#888780", bg: "rgba(136,135,128,0.15)" },
-  { t: "AMZN", n: "Amazon", sh: 22, p: 185.7, c: -0.33, col: "#d85a30", bg: "rgba(216,90,48,0.15)" },
+  { t: "NVDA", n: "Nvidia", sh: 42, p: 875.32, c: 0, col: "#5dcaa5", bg: "rgba(29,158,117,0.15)" },
+  { t: "AAPL", n: "Apple", sh: 115, p: 189.4, c: 0, col: "#7f77dd", bg: "rgba(127,119,221,0.15)" },
+  { t: "MSFT", n: "Microsoft", sh: 58, p: 412.87, c: 0, col: "#378add", bg: "rgba(55,138,221,0.15)" },
+  { t: "AMZN", n: "Amazon", sh: 22, p: 185.7, c: 0, col: "#d85a30", bg: "rgba(216,90,48,0.15)" },
+  { t: "SPY", n: "S&P 500 ETF", sh: 88, p: 521.14, c: 0, col: "#888780", bg: "rgba(136,135,128,0.15)" },
 ];
 
 const ALLOCS = [
@@ -29,8 +30,8 @@ const NEWS = [
 const INSIGHTS = [
   "Your portfolio outperformed the S&P 500 by 2.3% this week. NVDA is your star — consider trimming 10% to lock in gains.",
   "Concentration alert: 51% in tech. If rates rise, you could see amplified downside. Consider adding defensive positions.",
-  "BTC is approaching key resistance at $68,500. Your 0.72 BTC could see a 12% move in either direction this week.",
-  "Tax-loss opportunity: MSFT is down 0.88% today. A small trim could offset NVDA gains and reduce cap gains by ~$1,400.",
+  "BTC is approaching key resistance at $68,500. Your position could see a 12% move in either direction this week.",
+  "Tax-loss opportunity: MSFT is down today. A small trim could offset gains and reduce your cap gains exposure.",
 ];
 
 const s = {
@@ -65,7 +66,9 @@ function fmt(n) { return "$" + Math.round(n).toLocaleString(); }
 export default function App() {
   const [page, setPage] = useState("dashboard");
   const [holdings, setHoldings] = useState(HOLDINGS);
-  const [portVal, setPortVal] = useState(284619);
+  const [loading, setLoading] = useState(true);
+  const [dataSource, setDataSource] = useState("simulated");
+  const [portVal, setPortVal] = useState(0);
   const [clock, setClock] = useState("");
   const [insightIdx, setInsightIdx] = useState(0);
   const chartRef = useRef(null);
@@ -75,42 +78,76 @@ export default function App() {
   const [tradeSym, setTradeSym] = useState("NVDA");
   const [tradeQty, setTradeQty] = useState(10);
   const [aiInput, setAiInput] = useState("");
-  const [aiMessages, setAiMessages] = useState([{ from: "vault", text: "Good morning. Your portfolio is up 1.15% today. NVDA is your biggest driver — up 3.1%. Your Sharpe ratio of 1.87 puts you in the top 18% of retail investors." }]);
+  const [aiMessages, setAiMessages] = useState([{ from: "vault", text: "Good morning. Loading your real portfolio data now..." }]);
+
+  async function fetchRealPrices() {
+    try {
+      const updated = [...HOLDINGS];
+      for (let i = 0; i < updated.length; i++) {
+        const h = updated[i];
+        const res = await fetch(
+          `https://api.polygon.io/v2/aggs/ticker/${h.t}/prev?adjusted=true&apiKey=${POLYGON_KEY}`
+        );
+        const data = await res.json();
+        if (data.results && data.results[0]) {
+          const result = data.results[0];
+          const price = result.c;
+          const open = result.o;
+          const change = ((price - open) / open) * 100;
+          updated[i] = { ...h, p: price, c: parseFloat(change.toFixed(2)) };
+        }
+      }
+      setHoldings(updated);
+      const total = updated.reduce((sum, h) => sum + h.p * h.sh, 0);
+      setPortVal(Math.round(total));
+      setDataSource("live");
+      setAiMessages([{ from: "vault", text: `Live data loaded. Your portfolio is worth ${fmt(total)} based on yesterday's closing prices. NVDA is ${updated[0].c >= 0 ? "up" : "down"} ${Math.abs(updated[0].c).toFixed(2)}% — your biggest position.` }]);
+    } catch (err) {
+      const total = HOLDINGS.reduce((sum, h) => sum + h.p * h.sh, 0);
+      setPortVal(Math.round(total));
+      setDataSource("simulated");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    const tick = setInterval(() => {
-      setPortVal(v => Math.round(v + (Math.random() - 0.48) * 220));
-      setHoldings(h => h.map(x => ({ ...x, p: Math.max(1, x.p * (1 + (Math.random() - 0.49) * 0.05)), c: x.c + (Math.random() - 0.5) * 0.12 })));
-    }, 2600);
+    fetchRealPrices();
     const clkInt = setInterval(() => {
       const n = new Date();
       setClock([n.getHours(), n.getMinutes(), n.getSeconds()].map(x => String(x).padStart(2, "0")).join(":"));
     }, 1000);
     const insightInt = setInterval(() => setInsightIdx(i => (i + 1) % INSIGHTS.length), 6000);
-    return () => { clearInterval(tick); clearInterval(clkInt); clearInterval(insightInt); };
+    const tickInt = setInterval(() => {
+      setPortVal(v => Math.round(v + (Math.random() - 0.48) * 220));
+    }, 2600);
+    return () => { clearInterval(clkInt); clearInterval(insightInt); clearInterval(tickInt); };
   }, []);
 
   useEffect(() => {
-    if (page !== "dashboard" || !chartRef.current) return;
-    const cfgs = { "1D": { pts: 28, base: 281400, v: 1200 }, "1W": { pts: 35, base: 274000, v: 3500 }, "1M": { pts: 40, base: 261000, v: 5800 }, "3M": { pts: 50, base: 244000, v: 9800 }, "1Y": { pts: 52, base: 215000, v: 17000 } };
+    if (page !== "dashboard" || !chartRef.current || portVal === 0) return;
+    const cfgs = { "1D": { pts: 28, base: portVal * 0.985, v: portVal * 0.004 }, "1W": { pts: 35, base: portVal * 0.96, v: portVal * 0.012 }, "1M": { pts: 40, base: portVal * 0.92, v: portVal * 0.02 }, "3M": { pts: 50, base: portVal * 0.86, v: portVal * 0.034 }, "1Y": { pts: 52, base: portVal * 0.76, v: portVal * 0.06 } };
     const cfg = cfgs[tf] || cfgs["1W"];
     const data = []; let v = cfg.base;
     for (let i = 0; i < cfg.pts; i++) { v += (Math.random() - 0.42) * cfg.v; data.push(Math.round(v)); }
     data.push(portVal);
     if (chartInstance.current) chartInstance.current.destroy();
+    if (!chartRef.current) return;
     chartInstance.current = new Chart(chartRef.current, {
       type: "line",
       data: { labels: data.map((_, i) => i), datasets: [{ data, borderColor: "#5dcaa5", borderWidth: 1.5, fill: false, tension: 0.35, pointRadius: 0 }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: "#1c1c28", bodyColor: "#edeaf8", bodyFont: { size: 12 }, callbacks: { title: () => "", label: c => "$" + c.parsed.y.toLocaleString() } } }, scales: { x: { display: false }, y: { display: true, position: "right", grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#4a4960", fontSize: 9, callback: v => "$" + Math.round(v / 1000) + "k", maxTicksLimit: 4 }, border: { display: false } } } },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: "#1c1c28", bodyColor: "#edeaf8", bodyFont: { size: 12 }, callbacks: { title: () => "", label: c => "$" + c.parsed.y.toLocaleString() } } }, scales: { x: { display: false }, y: { display: true, position: "right", grid: { color: "rgba(255,255,255,0.04)" }, ticks: { color: "#4a4960", callback: v => "$" + Math.round(v / 1000) + "k", maxTicksLimit: 4 }, border: { display: false } } } },
     });
-  }, [tf, page]);
+  }, [tf, page, portVal]);
 
   const tradePrice = holdings.find(h => h.t === tradeSym.toUpperCase())?.p || 200;
   const tradeTotal = (tradeQty * tradePrice).toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const dayChange = holdings.reduce((sum, h) => sum + (h.p * h.c / 100) * h.sh, 0);
 
   function sendAI() {
     if (!aiInput.trim()) return;
-    setAiMessages(m => [...m, { from: "user", text: aiInput }, { from: "vault", text: "Analyzing your portfolio in context of that question... Great point. Based on your current holdings, I'd suggest reviewing your NVDA position first as it represents your highest concentration risk at 13% of total value." }]);
+    const q = aiInput;
+    setAiMessages(m => [...m, { from: "user", text: q }, { from: "vault", text: `Analyzing "${q}" in context of your ${dataSource === "live" ? "live" : "simulated"} portfolio worth ${fmt(portVal)}. Your largest position is NVDA at ${Math.round(holdings[0].p * holdings[0].sh / portVal * 100)}% of total value. Consider your risk tolerance before making changes.` }]);
     setAiInput("");
   }
 
@@ -130,7 +167,10 @@ export default function App() {
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={s.livePill}><div style={{ width: 5, height: 5, borderRadius: "50%", background: "#5dcaa5", animation: "blink 1.3s infinite" }} />Live</div>
+          <div style={{ ...s.livePill, color: dataSource === "live" ? "#5dcaa5" : "#ef9f27", borderColor: dataSource === "live" ? "rgba(93,202,165,0.25)" : "rgba(239,159,39,0.25)" }}>
+            <div style={{ width: 5, height: 5, borderRadius: "50%", background: dataSource === "live" ? "#5dcaa5" : "#ef9f27", animation: "blink 1.3s infinite" }} />
+            {dataSource === "live" ? "Live data" : "Simulated"}
+          </div>
           <span style={{ fontSize: 11, color: "#6b6a80" }}>{clock}</span>
         </div>
       </div>
@@ -162,22 +202,28 @@ export default function App() {
         </div>
 
         <div style={s.main}>
-          {page === "dashboard" && (
+          {loading && (
+            <div style={{ textAlign: "center", padding: "60px 0", color: "#6b6a80", fontSize: 12 }}>
+              <div style={{ marginBottom: 8 }}>Fetching live market data...</div>
+              <div style={{ fontSize: 10, color: "#4a4960" }}>Connecting to Polygon.io</div>
+            </div>
+          )}
+
+          {!loading && page === "dashboard" && (
             <>
               <div style={s.aiPanel}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                   <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#7f77dd", animation: "blink 2s infinite" }} />
                   <span style={{ fontSize: 10, color: "#7f77dd", textTransform: "uppercase", letterSpacing: "0.1em" }}>Vault AI · Market Pulse</span>
                 </div>
-                <div style={{ fontSize: 12, lineHeight: 1.6, marginBottom: 10 }}>{INSIGHTS[insightIdx]}</div>
+                <div style={{ fontSize: 12, lineHeight: 1.6 }}>{INSIGHTS[insightIdx]}</div>
               </div>
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 10, color: "#6b6a80", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 4 }}>Total portfolio value</div>
-                <div style={{ fontFamily: "'DM Mono',monospace"
-, fontSize: 40, fontWeight: 800, letterSpacing: -2, lineHeight: 1 }}>{fmt(portVal)}</div>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 40, fontWeight: 800, letterSpacing: -2, lineHeight: 1 }}>{fmt(portVal)}</div>
                 <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                  <span style={s.chip(true)}>+$3,241 today (1.15%)</span>
-                  <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 4, background: "#16161f", color: "#6b6a80" }}>Since 2021: +27.4%</span>
+                  <span style={s.chip(dayChange >= 0)}>{dayChange >= 0 ? "+" : ""}{fmt(dayChange)} today</span>
+                  <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 4, background: "#16161f", color: "#6b6a80" }}>{dataSource === "live" ? "Real prices" : "Simulated"}</span>
                 </div>
               </div>
               <div style={s.card}>
@@ -189,11 +235,20 @@ export default function App() {
                 <div style={{ height: 140 }}><canvas ref={chartRef} /></div>
               </div>
               <div style={s.statRow}>
-                {[["Day P&L", "+$3,241", "+1.15%", "#5dcaa5"], ["All-time", "+$61,204", "+27.4%", "#5dcaa5"], ["Sharpe", "1.87", "Excellent", "#edeaf8"], ["Beta", "1.14", "vs S&P 500", "#edeaf8"]].map(([l, v, sub, col]) => (
-                  <div key={l} style={s.stat}><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b6a80", marginBottom: 5 }}>{l}</div><div style={{ fontSize: 19, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: col }}>{v}</div><div style={{ fontSize: 10, color: "#6b6a80", marginTop: 2 }}>{sub}</div></div>
+                {[
+                  ["Day P&L", `${dayChange >= 0 ? "+" : ""}${fmt(dayChange)}`, `${(dayChange / portVal * 100).toFixed(2)}%`, dayChange >= 0 ? "#5dcaa5" : "#e24b4a"],
+                  ["Portfolio", fmt(portVal), `${holdings.length} positions`, "#edeaf8"],
+                  ["Sharpe", "1.87", "Excellent", "#edeaf8"],
+                  ["Beta", "1.14", "vs S&P 500", "#edeaf8"]
+                ].map(([l, v, sub, col]) => (
+                  <div key={l} style={s.stat}><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b6a80", marginBottom: 5 }}>{l}</div><div style={{ fontSize: 19, fontFamily: "'DM Mono',monospace", fontWeight: 700, color: col }}>{v}</div><div style={{ fontSize: 10, color: "#6b6a80", marginTop: 2 }}>{sub}</div></div>
                 ))}
               </div>
-              <div style={s.secHdr}><div style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 600 }}>Holdings</div></div>
+              <div style={s.secHdr}>
+                <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 600 }}>
+                  Holdings {dataSource === "live" && <span style={{ fontSize: 10, color: "#5dcaa5", marginLeft: 6 }}>● live</span>}
+                </div>
+              </div>
               {holdings.map(h => (
                 <div key={h.t} style={s.hRow}>
                   <div style={{ width: 32, height: 32, borderRadius: 7, background: h.bg, color: h.col, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9 }}>{h.t.slice(0, 3)}</div>
@@ -206,7 +261,7 @@ export default function App() {
             </>
           )}
 
-          {page === "trade" && (
+          {!loading && page === "trade" && (
             <>
               <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Trade center</div>
               <div style={s.card}>
@@ -215,17 +270,22 @@ export default function App() {
                     <button key={t} onClick={() => setTradeType(t)} style={{ flex: 1, padding: 8, borderRadius: 6, fontSize: 12, border: "0.5px solid rgba(255,255,255,0.1)", background: tradeType === t ? (t === "buy" ? "rgba(93,202,165,0.14)" : "rgba(226,75,74,0.13)") : "transparent", color: tradeType === t ? (t === "buy" ? "#5dcaa5" : "#e24b4a") : "#6b6a80", cursor: "pointer" }}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>
                   ))}
                 </div>
-                {[["Symbol", <input key="sym" value={tradeSym} onChange={e => setTradeSym(e.target.value)} style={{ width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none" }} />], ["Shares", <input key="qty" type="number" value={tradeQty} onChange={e => setTradeQty(Number(e.target.value))} style={{ width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none" }} />]].map(([label, input]) => (
-                  <div key={label} style={{ marginBottom: 10 }}><div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>{label}</div>{input}</div>
-                ))}
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6b6a80", marginBottom: 5 }}><span>Est. price</span><span>${tradePrice.toFixed(2)}</span></div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Symbol</div>
+                  <input value={tradeSym} onChange={e => setTradeSym(e.target.value)} style={{ width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 10, color: "#6b6a80", marginBottom: 5 }}>Shares</div>
+                  <input type="number" value={tradeQty} onChange={e => setTradeQty(Number(e.target.value))} style={{ width: "100%", background: "#16161f", border: "0.5px solid rgba(255,255,255,0.11)", borderRadius: 6, padding: "8px 10px", color: "#edeaf8", fontFamily: "'DM Mono',monospace", fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#6b6a80", marginBottom: 5 }}><span>Price {dataSource === "live" ? "(live)" : "(est.)"}</span><span>${tradePrice.toFixed(2)}</span></div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 5 }}><span style={{ color: "#6b6a80" }}>Total cost</span><span>{tradeTotal}</span></div>
                 <button style={{ width: "100%", padding: 10, borderRadius: 7, border: "none", background: tradeType === "buy" ? "#5dcaa5" : "#e24b4a", color: tradeType === "buy" ? "#04342c" : "#fff", fontFamily: "'DM Mono',monospace", fontSize: 12, cursor: "pointer", marginTop: 10 }}>Preview {tradeType} order</button>
               </div>
             </>
           )}
 
-          {page === "ai" && (
+          {!loading && page === "ai" && (
             <>
               <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 20, fontWeight: 700, marginBottom: 14 }}>AI advisor</div>
               <div style={{ ...s.card, minHeight: 200 }}>
@@ -243,11 +303,11 @@ export default function App() {
             </>
           )}
 
-          {page === "goals" && (
+          {!loading && page === "goals" && (
             <>
               <div style={{ fontFamily: "'Syne',sans-serif", fontSize: 20, fontWeight: 700, marginBottom: 14 }}>Financial goals</div>
-              {[{ nm: "Retirement fund", cur: 284619, tgt: 500000, col: "#7f77dd", yr: 2045 }, { nm: "Down payment", cur: 48200, tgt: 80000, col: "#5dcaa5", yr: 2027 }, { nm: "Emergency fund", cur: 22000, tgt: 25000, col: "#ef9f27", yr: 2026 }].map(g => {
-                const pc = Math.round(g.cur / g.tgt * 100);
+              {[{ nm: "Retirement fund", cur: portVal, tgt: 500000, col: "#7f77dd", yr: 2045 }, { nm: "Down payment", cur: 48200, tgt: 80000, col: "#5dcaa5", yr: 2027 }, { nm: "Emergency fund", cur: 22000, tgt: 25000, col: "#ef9f27", yr: 2026 }].map(g => {
+                const pc = Math.min(100, Math.round(g.cur / g.tgt * 100));
                 return (
                   <div key={g.nm} style={{ ...s.card, marginBottom: 10 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
@@ -288,15 +348,17 @@ export default function App() {
 
       <div style={s.bottomBar}>
         <div style={{ display: "flex", gap: 20 }}>
-          {[["S&P 500", "5,892", "+0.44%", true], ["Nasdaq", "18,741", "+0.81%", true], ["BTC", "$67,240", "+2.31%", true], ["VIX", "14.2", "-1.2%", false]].map(([nm, v, c, up]) => (
-            <div key={nm} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 10, color: "#6b6a80" }}>{nm}</span>
-              <span style={{ fontSize: 11 }}>{v}</span>
-              <span style={{ fontSize: 10, color: up ? "#5dcaa5" : "#e24b4a" }}>{c}</span>
+          {holdings.slice(0, 4).map(h => (
+            <div key={h.t} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 10, color: "#6b6a80" }}>{h.t}</span>
+              <span style={{ fontSize: 11 }}>${h.p.toFixed(2)}</span>
+              <span style={{ fontSize: 10, color: h.c >= 0 ? "#5dcaa5" : "#e24b4a" }}>{h.c >= 0 ? "+" : ""}{h.c.toFixed(2)}%</span>
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 10, color: "#4a4960" }}>Simulated data · Not financial advice</div>
+        <div style={{ fontSize: 10, color: "#4a4960" }}>
+          {dataSource === "live" ? "Powered by Polygon.io" : "Simulated data"} · Not financial advice
+        </div>
       </div>
     </div>
   );
